@@ -5,7 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	. "sshMgr"
+	"sshMgr"
 )
 
 func main() {
@@ -17,6 +17,7 @@ func main() {
 		Command    string   `short:"c" long:"script" description:"run script by global defined"`
 		ServerName []string `short:"s" long:"server" description:"run script only in server list, default ALL"`
 		BuildConf  bool     `long:"build" description:"build a default server.json"`
+		UploadFile []string `short:"u" long:"upload" description:"upload files"`
 	}
 
 	var parser = flags.NewParser(&opts, flags.Default)
@@ -60,7 +61,7 @@ func main() {
         }
     }
 }`
-		err := ioutil.WriteFile("servers.json", []byte(defaultJson), os.ModePerm)
+		err := ioutil.WriteFile(sshMgr.GetDefault(opts.ConfPath, "servers.json"), []byte(defaultJson), os.ModePerm)
 
 		if err != nil {
 			log.Fatalln(err)
@@ -69,11 +70,13 @@ func main() {
 		return
 	}
 
-	SshMgr.ParseConf(GetDefault(opts.ConfPath, "servers.json"))
+	sshMgr.ParseConf(sshMgr.GetDefault(opts.ConfPath, "servers.json"))
 
-	if cmd, ok := SshMgr.Conf.Commands[opts.Command]; ok {
-		SshMgr.RunCommand(opts.ServerName, cmd)
-	} else {
-		SshMgr.RunCommand(opts.ServerName, []string{opts.Command})
+	if len(opts.UploadFile) != 0 {
+		sshMgr.SendFiles(opts.ServerName, opts.UploadFile)
+	}
+
+	if len(opts.Command) != 0 {
+		sshMgr.RunCommand(opts.ServerName, opts.Command)
 	}
 }
