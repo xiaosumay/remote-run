@@ -2,6 +2,7 @@ package sshMgr
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/tmc/scp"
@@ -39,6 +40,71 @@ var (
 	conf    _conf
 )
 
+func myJSONMarshal(t interface{}, indent bool) ([]byte, error) {
+	buffer := &bytes.Buffer{}
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(false)
+	if indent {
+		encoder.SetIndent("", "    ")
+	}
+	err := encoder.Encode(t)
+	return buffer.Bytes(), err
+}
+
+func MgrConf(filepath string, isAdd, isMod, isDel, isList bool, opts []string) {
+	ParseConf(filepath)
+
+	if isList {
+		data, err := myJSONMarshal(conf.Servers, true)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		fmt.Println(string(data))
+		return
+	}
+
+	if isAdd || isMod {
+		if len(opts[0]) == 0 {
+			log.Fatalln("name must be set")
+		}
+
+		if server, ok := conf.Servers[opts[0]]; ok {
+			opts[1] = GetDefault(opts[1], server.Addr)
+			opts[2] = GetDefault(opts[2], server.Port)
+			opts[3] = GetDefault(opts[3], server.Passwd)
+			opts[4] = GetDefault(opts[4], server.Key)
+			opts[5] = GetDefault(opts[5], server.Status)
+			opts[6] = GetDefault(opts[6], server.User)
+		}
+
+		conf.Servers[opts[0]] = _server{
+			Addr:   opts[1],
+			Port:   opts[2],
+			Passwd: opts[3],
+			Key:    opts[4],
+			Status: opts[5],
+			User:   opts[6],
+		}
+	} else if isDel {
+		if _, ok := conf.Servers[opts[0]]; ok {
+			delete(conf.Servers, opts[0])
+		}
+	}
+
+	data, err := myJSONMarshal(conf, true)
+
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	err = ioutil.WriteFile(filepath, data, os.ModePerm)
+
+	if err != nil {
+		log.Fatalln(err)
+	}
+}
+
 func ParseConf(filepath string) {
 	confs, err := ioutil.ReadFile(filepath)
 	if err != nil {
@@ -59,14 +125,20 @@ func GetDefault(key, fallback string) string {
 	return fallback
 }
 
+func isEmpty(str string) bool {
+	return 0 == len(str)
+}
+
 func connectTo(server _server) (*ssh.Client, error) {
 
 	var config *ssh.ClientConfig
 
-	if len(server.Passwd) == 0 {
-		key, err := ioutil.ReadFile(GetDefault(server.Key, conf.Key))
+	if isEmpty(server.Passwd) && (!isEmpty(server.Key) || isEmpty(conf.Passwd)) {
+		keyStr := GetDefault(server.Key, conf.Key)
+		key, err := ioutil.ReadFile(keyStr)
+
 		if err != nil {
-			log.Printf("unable to read private key: %v \n %s\n", err, GetDefault(server.Key, conf.Key))
+			log.Printf("unable to read private key: %v \n %s\n", err, keyStr)
 			return nil, err
 		}
 
@@ -122,8 +194,7 @@ func writePassword(in io.WriteCloser, out io.Reader, server _server) {
 		}
 
 		if b == byte('\n') {
-			line = strings.TrimLeft(line, "\n")
-			log.Printf("[%s:%s] %s: %s\n", server.Addr, GetDefault(server.Port, "22"), GetDefault(server.User, conf.User), line)
+			log.Printf("[%s:%s] %s: %v\n", server.Addr, GetDefault(server.Port, "22"), GetDefault(server.User, conf.User), line)
 			line = ""
 			continue
 		}
@@ -132,6 +203,13 @@ func writePassword(in io.WriteCloser, out io.Reader, server _server) {
 
 		if strings.HasPrefix(line, "[sudo] password for ") && strings.HasSuffix(line, ": ") {
 			_, err := in.Write([]byte(server.Passwd + "\n"))
+			if err != nil {
+				break
+			}
+		}
+
+		if strings.HasSuffix(line, "[Y/n] ") || strings.HasSuffix(line, "[y/N]: ") {
+			_, err := in.Write([]byte("y\n"))
 			if err != nil {
 				break
 			}
@@ -152,31 +230,21 @@ func runCommand(server _server, cmds []string) {
 	session, err := client.NewSession()
 
 	if err != nil {
-		log.Printf("[%s:%s]: %v\n", client.RemoteAddr(), client.RemoteAddr(), err)
+		log.Printf("[%s]: %v\n", client.RemoteAddr(), err)
 		return
 	}
 
-	modes := ssh.TerminalModes{
-		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
-		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
-	}
-
-	err = session.RequestPty("tty", 80, 40, modes)
-	if err != nil {
-		log.Printf("[%s:%s]: %v\n", client.RemoteAddr(), client.RemoteAddr(), err)
-		return
-	}
-
-	for idx, cmdstr := range cmds {
-		fi, err := os.Stat(cmdstr)
-		session2, errr := client.NewSession()
-		if err == nil && errr == nil {
-			if err = scp.CopyPath(cmdstr, fi.Name(), session2); err == nil {
+	for idx, cmd := range cmds {
+		fi, err := os.Stat(cmd)
+		session2, err2 := client.NewSession()
+		if err == nil && err2 == nil {
+			if err = scp.CopyPath(cmd, fi.Name(), session2); err == nil {
 				cmds[idx] = "bash " + fi.Name()
 			} else {
 				cmds = append(cmds[:idx], cmds[idx+1:]...)
 			}
 		}
+		session2.Close()
 	}
 
 	in, err := session.StdinPipe()
@@ -194,10 +262,12 @@ func runCommand(server _server, cmds []string) {
 	session.Output(strings.Join(cmds, " && "))
 }
 
-func getServers(servername []string) (servers map[string]_server) {
+func getServers(servername []string) map[string]_server {
 	if len(servername) == 0 {
 		return conf.Servers
 	}
+
+	var servers = make(map[string]_server)
 
 	for _, servername := range servername {
 		if server, ok := conf.Servers[servername]; ok {
@@ -205,19 +275,19 @@ func getServers(servername []string) (servers map[string]_server) {
 		}
 	}
 
-	return
+	return servers
 }
 
-func RunCommand(servername []string, cmdstr string) {
+func RunCommand(servername []string, cmd string) {
 
-	cmds, ok := conf.Commands[cmdstr]
+	cmds, ok := conf.Commands[cmd]
 	if !ok {
-		cmds = []string{cmdstr}
+		cmds = []string{cmd}
 	}
 
 	for name, server := range getServers(servername) {
 		if "shutdown" == server.Status {
-			log.Println(name + " configured to shutdown")
+			log.Printf("server [%s] configured to shutdown", name)
 			continue
 		}
 
@@ -229,16 +299,16 @@ func RunCommand(servername []string, cmdstr string) {
 }
 
 func getValidFiles(files []string) map[string]string {
-	vaildFiles := make(map[string]string)
+	validFiles := make(map[string]string)
 
 	for _, file := range files {
 		fi, err := os.Stat(file)
 		if err == nil {
-			vaildFiles[fi.Name()] = file
+			validFiles[fi.Name()] = file
 		}
 	}
 
-	return vaildFiles
+	return validFiles
 }
 
 func sendFilesToServer(server _server, files map[string]string) {
@@ -248,7 +318,7 @@ func sendFilesToServer(server _server, files map[string]string) {
 	client, err := connectTo(server)
 
 	if err != nil {
-		log.Printf("[%s:%s]: %v\n", client.RemoteAddr(), client.RemoteAddr(), err)
+		log.Printf("[%s]: %v\n", client.RemoteAddr(), err)
 		return
 	}
 
@@ -257,17 +327,20 @@ func sendFilesToServer(server _server, files map[string]string) {
 		session, err := client.NewSession()
 
 		if err != nil {
-			log.Printf("[%s:%s]: %v\n", client.RemoteAddr(), client.RemoteAddr(), err)
+			log.Printf("[%s]: %v\n", client.RemoteAddr(), err)
+			session.Close()
 			return
 		}
 
 		err = scp.CopyPath(file, name, session)
 		if err != nil {
 			log.Println(err)
+			session.Close()
 			continue
 		}
 
-		log.Printf("[%s:%s]: send file (%s) success !\n", client.RemoteAddr(), client.RemoteAddr(), file)
+		log.Printf("[%s]: send file (%s) success !\n", client.RemoteAddr(), file)
+		session.Close()
 	}
 }
 
