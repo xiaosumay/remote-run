@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"sshMgr"
 )
 
 func BuildDefaultConf(path string) {
@@ -79,7 +78,7 @@ func GetConfig(path string) (string, error) {
 
 func main() {
 
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	// log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	var opts struct {
 		ConfPath   string   `short:"f" long:"conf" description:"指定配置文件"`
@@ -120,7 +119,7 @@ func main() {
 	log.Printf("use configure from %s\n", confPath)
 
 	if opts.AddServer || opts.ModServer || opts.DeleteServer || opts.ListServer {
-		sshMgr.MgrConf(confPath, opts.AddServer, opts.ModServer, opts.DeleteServer, opts.ListServer, []string{
+		MgrConf(confPath, opts.AddServer, opts.ModServer, opts.DeleteServer, opts.ListServer, []string{
 			opts.Name, opts.Addr, opts.Port, opts.Passwd, opts.Key, opts.Status, opts.User,
 		})
 		return
@@ -136,13 +135,13 @@ func main() {
 		return
 	}
 
-	sshMgr.ParseConf(confPath)
+	ParseConf(confPath)
 
 	if len(opts.UploadFile) != 0 {
-		sshMgr.SendFiles(opts.ServerName, opts.UploadFile, opts.DestPath)
+		SendFiles(opts.ServerName, opts.UploadFile, opts.DestPath)
 	}
 
 	if len(opts.Command) != 0 {
-		sshMgr.RunCommand(opts.ServerName, opts.Command)
+		RunCommand(opts.ServerName, opts.Command)
 	}
 }

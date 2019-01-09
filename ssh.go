@@ -1,4 +1,4 @@
-package sshMgr
+package main
 
 import (
 	"bufio"
