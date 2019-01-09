@@ -166,7 +166,7 @@ func connectTo(server _server) (*ssh.Client, error) {
 		}
 	}
 
-	ipaddr := fmt.Sprintf("%s:%s", server.Addr, GetDefault(server.Port, "22"))
+	ipaddr := fmt.Sprintf("%s:%s", strings.Trim(server.Addr, " "), GetDefault(server.Port, "22"))
 	client, err := ssh.Dial("tcp", ipaddr, config)
 
 	if err != nil {
@@ -217,7 +217,7 @@ func writePassword(in io.WriteCloser, out io.Reader, server _server) {
 	}
 }
 
-func runCommand(server _server, cmds []string) {
+func runCommand(name string, server _server, cmds []string) {
 	process <- 1
 	defer func() { <-process; wg.Done() }()
 
@@ -259,7 +259,7 @@ func runCommand(server _server, cmds []string) {
 
 	go writePassword(in, out, server)
 
-	session.Output(strings.Join(cmds, " && "))
+	session.Output("export SERVER_NAME=" + name + "; " + strings.Join(cmds, " && "))
 }
 
 func getServers(servername []string) map[string]_server {
@@ -292,7 +292,7 @@ func RunCommand(servername []string, cmd string) {
 		}
 
 		wg.Add(1)
-		go runCommand(server, cmds)
+		go runCommand(name, server, cmds)
 	}
 
 	wg.Wait()
@@ -311,28 +311,52 @@ func getValidFiles(files []string) map[string]string {
 	return validFiles
 }
 
-func sendFilesToServer(server _server, files map[string]string) {
+func sendFilesToServer(server _server, files map[string]string, destPath string) {
 	process <- 1
 	defer func() { <-process; wg.Done() }()
 
 	client, err := connectTo(server)
 
 	if err != nil {
-		log.Printf("[%s]: %v\n", client.RemoteAddr(), err)
+		log.Printf("[%s]: %v\n", server.Addr, err)
 		return
 	}
 
-	for name, file := range files {
-
+	if 0 != len(destPath) {
 		session, err := client.NewSession()
 
 		if err != nil {
-			log.Printf("[%s]: %v\n", client.RemoteAddr(), err)
+			log.Printf("[%s]: %v\n", server.Addr, err)
 			session.Close()
 			return
 		}
 
-		err = scp.CopyPath(file, name, session)
+		destPath = strings.Trim(destPath, "'")
+		destPath = strings.Trim(destPath, "\"")
+
+		err = session.Run("sudo mkdir -p " + destPath + " && sudo chown `whoami`:`whoami` " + destPath)
+		if err != nil {
+			log.Fatalf("[%s]: %v\n", server.Addr, err)
+			return
+		}
+
+		session.Close()
+
+		if !strings.HasSuffix(destPath, "/") {
+			destPath += "/"
+		}
+	}
+
+	for name, file := range files {
+		session, err := client.NewSession()
+
+		if err != nil {
+			log.Printf("[%s]: %v\n", server.Addr, err)
+			session.Close()
+			return
+		}
+
+		err = scp.CopyPath(file, destPath+name, session)
 		if err != nil {
 			log.Println(err)
 			session.Close()
@@ -344,7 +368,7 @@ func sendFilesToServer(server _server, files map[string]string) {
 	}
 }
 
-func SendFiles(servername []string, files []string) {
+func SendFiles(servername []string, files []string, destPath string) {
 	vfs := getValidFiles(files)
 
 	for name, server := range getServers(servername) {
@@ -354,7 +378,7 @@ func SendFiles(servername []string, files []string) {
 		}
 
 		wg.Add(1)
-		go sendFilesToServer(server, vfs)
+		go sendFilesToServer(server, vfs, destPath)
 	}
 
 	wg.Wait()
