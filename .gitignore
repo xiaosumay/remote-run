@@ -2,17 +2,17 @@
 bin
 pkg
 src/*
-!src/sshMgr
+!src/*.go
 *.json
-# Binaries for programs and plugins                                   
-*.exe                                                                 
-*.exe~                                                                
-*.dll                                                                 
-*.so                                                                  
-*.dylib                                                               
-                                                                      
-# Test binary, build with `go test -c`                                
-*.test                                                                
-                                                                      
-# Output of the go coverage tool, specifically when used with LiteIDE 
-*.out                                                                 
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, build with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
